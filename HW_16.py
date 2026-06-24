@@ -4,14 +4,23 @@ import matplotlib.pyplot as plt
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing import image
 from PIL import Image, ImageOps
+import tensorflow as tf
 
 # ---------------- Завантаження моделей ----------------
 cnn_model = load_model("cnn_model.keras")
-vgg_model = load_model("vgg16_model.keras")
+
+# VGG16 через TensorFlow Lite Interpreter
+vgg_interpreter = tf.lite.Interpreter(model_path="vgg16_quantized.tflite")
+vgg_interpreter.allocate_tensors()
+vgg_input_details = vgg_interpreter.get_input_details()
+vgg_output_details = vgg_interpreter.get_output_details()
 
 # ---------------- Завантаження історій ----------------
 cnn_history = np.load("cnn_history.npz", allow_pickle=True)["history"].item()
-vgg_history = np.load("vgg_history.npz", allow_pickle=True)["history"].item()
+vgg_history = np.load("vgg_history.npz", allow_pickle=True)
+# доступ до масивів
+fe_acc = vgg_history["fe_accuracy"]
+ft_acc = vgg_history["ft_accuracy"]
 
 labels = [
     "T-shirt/top", "Trouser", "Pullover", "Dress", "Coat",
@@ -36,10 +45,14 @@ if uploaded_file is not None:
         prediction = cnn_model.predict(img_array)
 
     else:  # VGG16 очікує 96×96×3
-        pil_img = pil_img.resize((96,96))
+        pil_img = pil_img.resize((96, 96))
         img_array = image.img_to_array(pil_img) / 255.0
-        img_array = np.expand_dims(img_array, axis=0)
-        prediction = vgg_model.predict(img_array)
+        img_array = np.expand_dims(img_array, axis=0).astype(np.float32)
+
+        # Використовуємо TFLite Interpreter замість .predict()
+        vgg_interpreter.set_tensor(vgg_input_details[0]['index'], img_array)
+        vgg_interpreter.invoke()
+        prediction = vgg_interpreter.get_tensor(vgg_output_details[0]['index'])
 
     st.image(pil_img, caption="Оброблене зображення", use_column_width=True)
 
@@ -48,7 +61,8 @@ if uploaded_file is not None:
     for i, label in enumerate(labels):
         st.write(f"{label}: {prediction[0][i]:.4f}")
 
-    st.write("Передбачений клас:", labels[np.argmax(prediction)])
+    st.markdown("ПЕРЕДБАЧЕНИЙ КЛАС:")
+    st.write(labels[np.argmax(prediction)])
 
     # ---------------- 4. Графіки історії ----------------
     if model_choice == "CNN":

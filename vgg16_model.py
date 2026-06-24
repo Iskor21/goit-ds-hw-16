@@ -1,6 +1,6 @@
 import tensorflow as tf
 from tensorflow import keras
-from tensorflow.keras import layers, models
+from tensorflow.keras import layers
 import numpy as np
 
 # 1. Завантаження датасету
@@ -23,16 +23,17 @@ base_model = keras.applications.VGG16(
     include_top=False,
     input_shape=(96,96,3)
 )
-base_model.trainable = False   # Етап 1: Feature Extraction
+base_model.trainable = False
 
-# 3. Модель
-model = models.Sequential([
-    base_model,
-    layers.GlobalAveragePooling2D(),
-    layers.Dense(128, activation="relu"),
-    layers.Dropout(0.5),
-    layers.Dense(10, activation="softmax")
-])
+# 3. Functional API (без pruning)
+inputs = keras.Input(shape=(96,96,3))
+x = base_model(inputs, training=False)
+x = layers.GlobalAveragePooling2D()(x)
+x = layers.Dense(128, activation="relu")(x)
+x = layers.Dropout(0.5)(x)
+outputs = layers.Dense(10, activation="softmax")(x)
+
+model = keras.Model(inputs, outputs)
 
 # 4. Компіляція
 model.compile(
@@ -41,25 +42,18 @@ model.compile(
     metrics=["accuracy"]
 )
 
-# 5. EarlyStopping
-callback = keras.callbacks.EarlyStopping(
-    monitor="val_accuracy",
-    patience=3,
-    restore_best_weights=True
-)
-
-# 6. Навчання (Feature Extraction)
-history_fe = model.fit(
+# 5. Навчання (Feature Extraction)
+history = model.fit(
     x_train_small, y_train_small,
     epochs=15,
     batch_size=16,
     validation_split=0.1,
     verbose=2,
-    callbacks=[callback]
+    callbacks=[keras.callbacks.EarlyStopping(monitor="val_accuracy", patience=3, restore_best_weights=True)]
 )
 
-# 7. Fine-Tuning: розморожуємо верхні шари
-for layer in base_model.layers[-4:]:  # останні 4 шари
+# 6. Fine-Tuning: розморожуємо верхні шари
+for layer in base_model.layers[-4:]:
     layer.trainable = True
 
 model.compile(
@@ -68,33 +62,39 @@ model.compile(
     metrics=["accuracy"]
 )
 
-# 8. Донавчання
 history_ft = model.fit(
     x_train_small, y_train_small,
     epochs=10,
     batch_size=16,
     validation_split=0.1,
-    verbose=2,
-    callbacks=[callback]
+    verbose=2
 )
 
-# 9. Оцінка
+# 7. Оцінка
 test_loss, test_acc = model.evaluate(x_test_small, y_test, verbose=0)
-print(f"Точність VGG16 (Feature Extraction + Fine-Tuning): {test_acc:.4f}")
+print(f"Точність VGG16 (Fine-Tuning): {test_acc:.4f}")
 
-# 10. Збереження моделі
-model.save("vgg16_model.keras")
+# 8. Збереження моделі
+model.save("vgg16_model.h5")
 
-# 11. Збереження історії
-combined_history = {
-    "fe_accuracy": history_fe.history["accuracy"],
-    "fe_val_accuracy": history_fe.history["val_accuracy"],
-    "ft_accuracy": history_ft.history["accuracy"],
-    "ft_val_accuracy": history_ft.history["val_accuracy"],
-    "fe_loss": history_fe.history["loss"],
-    "fe_val_loss": history_fe.history["val_loss"],
-    "ft_loss": history_ft.history["loss"],
-    "ft_val_loss": history_ft.history["val_loss"]
-}
+# 9. Quantization у TensorFlow Lite
+converter = tf.lite.TFLiteConverter.from_keras_model(model)
+converter.optimizations = [tf.lite.Optimize.DEFAULT]
+tflite_model = converter.convert()
+with open("vgg16_quantized.tflite", "wb") as f:
+    f.write(tflite_model)
 
-np.savez("vgg_history.npz", history=combined_history)
+print("Модель збережено як vgg16_model.h5 та vgg16_quantized.tflite")
+
+# 10. Збереження історії навчання у npz
+np.savez("vgg_history.npz",
+         fe_accuracy=history.history['accuracy'],
+         fe_val_accuracy=history.history['val_accuracy'],
+         fe_loss=history.history['loss'],
+         fe_val_loss=history.history['val_loss'],
+         ft_accuracy=history_ft.history['accuracy'],
+         ft_val_accuracy=history_ft.history['val_accuracy'],
+         ft_loss=history_ft.history['loss'],
+         ft_val_loss=history_ft.history['val_loss'])
+
+print("Історію навчання збережено у vgg_history.npz")

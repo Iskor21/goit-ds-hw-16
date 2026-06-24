@@ -3,3 +3,4 @@ numpy
 matplotlib
 pillow
 scikit-learn
+tflite-runtime
